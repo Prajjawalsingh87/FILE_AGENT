@@ -78,3 +78,33 @@ The project uses the OpenAI-compatible Python client to talk to the Groq API.
 - Unsafe paths such as `../secret.txt` are blocked.
 - File reads and writes are limited to the `data/` folder.
 - Missing files return a clear error message.
+
+## API Endpoints
+
+The application is hosted at: [https://file-agent.onrender.com/](https://file-agent.onrender.com/)
+
+### Available Endpoints
+
+1. **GET /**
+   - **Description**: Returns a welcome message indicating that the File Agent is running.
+   - **Response**:
+     ```json
+     {
+       "message": "File Agent Running 🚀"
+     }
+     ```
+
+2. **POST /run**
+   - **Description**: Executes the agent with the provided user input.
+   - **Request Body**:
+     ```json
+     {
+       "user_input": "<Your input here>"
+     }
+     ```
+   - **Response**:
+     ```json
+     {
+       "response": "<Agent's response>"
+     }
+     ```
