@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt ruff httpx
+      - name: Lint
+        run: ruff check .
+      - name: Compile
+        run: python -m compileall -q app
+      - name: Smoke test API (no API key)
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from app.api import app
+
+          with TestClient(app) as client:
+              assert client.get("/").status_code == 200
+              assert client.get("/health").json()["llm_configured"] is False
+              r = client.post("/run", json={"user_input": "read notes.txt"})
+              assert r.status_code == 503, r.text
+          print("API smoke test passed")
+          PY
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t file-agent:ci .
+      - name: Run container and hit /health
+        run: |
+          docker run -d --name file-agent -p 8000:8000 file-agent:ci
+          for i in $(seq 1 20); do curl -fsS http://localhost:8000/health && exit 0; sleep 1; done
+          docker logs file-agent
+          exit 1

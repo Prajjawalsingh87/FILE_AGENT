@@ -1,15 +1,17 @@
 from openai import OpenAI
 
-from app.core.config import get_groq_api_key
+from app.core.config import GROQ_BASE_URL, GROQ_MODEL, LLM_TIMEOUT_SECONDS, get_groq_api_key
 
 
 def call_llm(prompt: str) -> str:
     client = OpenAI(
         api_key=get_groq_api_key(),
-        base_url="https://api.groq.com/openai/v1",
+        base_url=GROQ_BASE_URL,
+        timeout=LLM_TIMEOUT_SECONDS,
+        max_retries=2,
     )
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
     )

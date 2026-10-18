@@ -1,0 +1,7 @@
+target-version = "py310"
+line-length = 100
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# FastAPI's dependency/parameter declarations use calls in defaults by design.
+ignore = ["B008"]
