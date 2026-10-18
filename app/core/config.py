@@ -8,7 +8,18 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+
+
+def _read_timeout(default: float = 30.0) -> float:
+    raw = os.getenv("LLM_TIMEOUT_SECONDS", "").strip()
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+LLM_TIMEOUT_SECONDS = _read_timeout()
 
 MISSING_KEY_MESSAGE = (
     "GROQ_API_KEY is not set. Copy .env.example to .env and add your key, "
