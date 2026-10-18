@@ -1,22 +1,29 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.agent.agent import run_agent
-
-
+from app.agent.agent import run_agent  # noqa: E402
+from app.core.config import MISSING_KEY_MESSAGE, has_groq_api_key  # noqa: E402
 
 
 def main() -> None:
+    if not has_groq_api_key():
+        print(f"Error: {MISSING_KEY_MESSAGE}", file=sys.stderr)
+        sys.exit(1)
+
     print("File Agent CLI. Type 'exit' to quit.")
 
     while True:
-        user_input = input(">>> ").strip()
+        try:
+            user_input = input(">>> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
 
-        if user_input.lower() == "exit":
+        if user_input.lower() in {"exit", "quit"}:
             print("Goodbye.")
             break
 
