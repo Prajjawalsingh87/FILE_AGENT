@@ -170,3 +170,14 @@ are lost on redeploy unless you attach a persistent disk.
 - File reads and writes are limited to `data/`.
 - `.env` is git-ignored; never commit API keys.
 - The container runs as an unprivileged user.
+
+
+## October 2026 improvements
+
+`GET /tools` lists supported tool names and descriptions without touching files. Both JSON and legacy query inputs to `/run` are limited to 4,000 characters. API regression tests cover discovery, oversized input and blank input.
+
+
+Run `python -m unittest discover -s tests` after installing the requirements and
+`httpx`. The service remains suited to the existing Render/container deployment.
+Vercel's ephemeral function filesystem does not provide the persistent, shared
+`data/` workspace this API expects. Do not move file state there without a storage redesign.

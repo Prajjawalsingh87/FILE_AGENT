@@ -16,3 +16,7 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+.vercel/
+
+.code-review-graph/
