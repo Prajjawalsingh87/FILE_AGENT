@@ -13,7 +13,14 @@ Live instance (Render): <https://file-agent.onrender.com/>
 - Create, read and append files using natural language
 - **Full-text search** over `data/` with pure-Python BM25 ranking (`GET /search`),
   highlighted snippets and pagination; also available to the agent as the `search_files` tool
-- **Web UI** at `/` (plain HTML/JS, no build step) to run the agent and search files
+- **Chat UI** at `/` (plain HTML/CSS/JS, no build step): a conversation view that shows each
+  reply plus the tools the agent used ("searched files for …", "read notes.txt"), loading and
+  error states, light/dark theme and a mobile layout
+- **Conversation memory** per browser tab: the page keeps the chat in `sessionStorage` and sends
+  the last 10 turns to `POST /chat`; the server trims them to 12 turns / ~2,000 tokens
+- **File upload** (`POST /files`, multipart) with strict limits: text extensions only, ≤ 1 MB,
+  UTF-8 only, safe file names, 20 MB / 200 files total; list (`GET /files`) and delete
+  (`DELETE /files/{name}`). Uploaded files are searchable immediately
 - Strict JSON tool-calling with validation of the model's output
 - Path sandboxing: absolute paths and `..` traversal are rejected, all I/O stays in `data/`
 - CLI (`app/main.py`) and HTTP API (`app/api.py`) entry points
@@ -36,6 +43,8 @@ flowchart LR
   T1 & T2 & T3 --> D[(data/ sandbox)]
   T4 --> S[BM25 index<br/>app/search] --> D
   W[GET /search] --> S
+  C[POST /chat<br/>message + recent history] --> A
+  F[POST/DELETE /files<br/>validated uploads] --> D
 ```
 
 1. The CLI or API receives a request.
@@ -111,15 +120,68 @@ docker run --rm -p 8000:8000 --env-file .env file-agent
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Single-page web UI (HTML) for running the agent and searching |
+| `GET` | `/` | Chat web UI with file upload and search panels |
 | `GET` | `/health` | `{"status": "ok", "llm_configured": true/false}` |
 | `GET` | `/tools` | Names and descriptions of the agent's tools |
 | `GET` | `/search?q=&limit=&offset=` | BM25-ranked full-text search over `data/` |
-| `POST` | `/run` | Body `{"user_input": "..."}` → `{"response": "..."}` |
+| `POST` | `/run` | Body `{"user_input": "..."}` → `{"response": "..."}` (single shot) |
+| `POST` | `/chat` | Body `{"message": "...", "history": [{"role", "content"}]}` → reply + tools used |
+| `GET` | `/files` | Files in `data/` with size, plus storage usage and limits |
+| `POST` | `/files?overwrite=false` | Multipart field `file`; returns `201` with the stored file |
+| `DELETE` | `/files/{name}` | Delete one file (`204`, or `404` if missing) |
 
 `POST /run` still accepts the older `?user_input=...` query parameter for
 backward compatibility, but the JSON body is preferred. It returns `422` when
 no input is given and `503` when `GROQ_API_KEY` is not configured.
+
+## Chat and conversation memory
+
+`POST /chat` runs one turn. The server stores nothing: the browser keeps the
+conversation in `sessionStorage` (cleared when the tab closes or with **New chat**)
+and sends the most recent turns with every message.
+
+```bash
+curl -s -X POST http://localhost:8000/chat -H 'Content-Type: application/json' -d '{
+  "message": "read that file",
+  "history": [
+    {"role": "user", "content": "find files that mention milk"},
+    {"role": "assistant", "content": "Found 1 matching file(s) ... groceries.txt ..."}
+  ]}'
+```
+
+```json
+{"reply": "buy oat milk and bread", "ok": true, "history_turns_used": 2,
+ "tool_calls": [{"tool": "read_file", "args": {"name": "groceries.txt"},
+                 "summary": "read groceries.txt", "ok": true}]}
+```
+
+- History budget: the client sends at most 10 turns / 12,000 characters; the server
+  keeps at most 12 turns and ~2,000 tokens (≈ 4 chars per token), newest first, and
+  truncates any single turn to 2,000 characters. Only `user`/`assistant` roles are accepted.
+- The model either calls one tool or answers directly with `{"reply": "..."}` (greetings,
+  questions about the conversation). Tool errors come back as `ok: false` with the message.
+- Status codes: `422` invalid input, `503` no `GROQ_API_KEY`, `502` the LLM call failed
+  (network, invalid key, rate limit). The UI shows these as error bubbles with **Retry**.
+
+## Uploads
+
+| Rule | Limit |
+|---|---|
+| Extensions | `.txt .md .markdown .csv .tsv .json .log .yaml .yml .toml .ini .cfg .xml .rst .py .js .ts .css .html .sql .sh` |
+| Size | ≤ 1 MB per file (oversized requests are rejected from `Content-Length` before parsing) |
+| Content | UTF-8 text, no NUL bytes |
+| Names | letters, digits, space, `.`, `_`, `-`; must start with a letter/digit; ≤ 100 chars; no `/`, `\`, `..`, hidden or reserved names |
+| Storage | 20 MB and 200 files in `data/` in total |
+| Existing name | `409` unless `?overwrite=true` |
+
+```bash
+curl -s -F file=@notes.md http://localhost:8000/files
+curl -s http://localhost:8000/files
+curl -s -X DELETE http://localhost:8000/files/notes.md
+```
+
+The upload endpoint has no authentication. On a public deployment anyone can add
+or delete files in `data/`, bounded by the limits above; put it behind auth if that matters.
 
 ## Search
 
@@ -160,6 +222,7 @@ The agent can use the same index through the `search_files` tool, e.g.
 - `read notes.txt`
 - `append notes.txt with world`
 - `search files for hello`
+- then, in the chat: `read that file`, `append "done" to it`
 
 ## Project structure
 
@@ -168,6 +231,7 @@ FILE_AGENT/
 ├── app/
 │   ├── agent/
 │   │   ├── agent.py          # orchestration: prompt → LLM → validate → tool
+│   │   ├── chat.py           # conversation turns: history trimming, tool summaries
 │   │   ├── planner.py        # placeholder for multi-step planning
 │   │   └── prompt.py         # strict JSON system prompt
 │   ├── core/
@@ -176,12 +240,13 @@ FILE_AGENT/
 │   ├── search/
 │   │   ├── bm25.py           # tokenizer, inverted index, BM25, snippets
 │   │   └── index.py          # data/ scanner, rebuild on file changes
-│   ├── static/index.html     # web UI served at /
+│   ├── static/index.html     # chat UI served at /
+│   ├── storage.py            # upload validation, list/delete, storage caps
 │   ├── tools/
 │   │   ├── file_tools.py     # sandboxed create/read/append
 │   │   ├── search_tools.py   # search_files agent tool
 │   │   └── tool_registry.py  # tool lookup by name
-│   ├── api.py                # FastAPI app
+│   ├── api.py                # FastAPI app (/run, /chat, /files, /search)
 │   └── main.py               # interactive CLI
 ├── data/                     # sandbox for all file operations
 ├── .github/workflows/ci.yml  # lint, compile, API smoke test, docker build
@@ -201,7 +266,7 @@ The live instance runs on Render. For a native Python web service use:
 
 Alternatively, point Render at the `Dockerfile`; it honours the `PORT` variable.
 Note that files written to `data/` live on the container's ephemeral disk and
-are lost on redeploy unless you attach a persistent disk.
+are lost on redeploy unless you attach a persistent disk. That includes uploads.
 
 ## Troubleshooting
 
@@ -217,6 +282,7 @@ are lost on redeploy unless you attach a persistent disk.
 ## Safety notes
 
 - File reads and writes are limited to `data/`.
+- Uploads are validated server-side (extension, size, UTF-8, file name) and capped in total size.
 - `.env` is git-ignored; never commit API keys.
 - The container runs as an unprivileged user.
 
