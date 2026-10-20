@@ -38,6 +38,9 @@ jobs:
               assert client.get("/health").json()["llm_configured"] is False
               r = client.post("/run", json={"user_input": "read notes.txt"})
               assert r.status_code == 503, r.text
+              r = client.post("/chat", json={"message": "hi"})
+              assert r.status_code == 503, r.text
+              assert client.get("/files").status_code == 200
           print("API smoke test passed")
           PY
 

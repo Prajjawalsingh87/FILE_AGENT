@@ -32,3 +32,16 @@ For search_files use {"tool": "search_files", "args": {"query": "words to find"}
 
 If the tool does not need some arguments, omit them from args.
 """
+
+CHAT_SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + """
+Conversation rules:
+- Earlier turns of the conversation are included for context. Use them to resolve
+  references such as "that file", "it" or "the same file".
+- Only act on the latest user message.
+- If the latest message needs no file tool (a greeting, a question about the
+  conversation or about what you can do), return {"reply": "short plain-text answer"}
+  instead of a tool call.
+"""
+)
