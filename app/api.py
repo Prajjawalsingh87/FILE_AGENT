@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -98,17 +98,86 @@ app = FastAPI(title="File Agent", version="1.1.0", lifespan=lifespan)
 MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_BYTES + 64_000
 
 
-@app.middleware("http")
-async def limit_upload_size(request: Request, call_next):
-    """Reject oversized uploads from Content-Length before the body is parsed."""
-    if request.method == "POST" and request.url.path == "/files":
-        length = request.headers.get("content-length")
-        if length is not None and (not length.isdigit() or int(length) > MAX_UPLOAD_REQUEST_BYTES):
-            return JSONResponse(
-                status_code=413,
-                content={"detail": f"Upload is larger than {MAX_UPLOAD_BYTES // 1_000_000} MB."},
-            )
-    return await call_next(request)
+class UploadSizeLimitMiddleware:
+    """Cap the bytes actually received for ``POST /files``.
+
+    A declared ``Content-Length`` over the limit is rejected before any body is
+    read. Bodies without one (``Transfer-Encoding: chunked``) are counted as they
+    stream in; once the limit is passed the app is stopped and a 413 is sent, so
+    the multipart parser never buffers more than the limit.
+    """
+
+    def __init__(self, app, path: str = "/files", max_bytes: int = MAX_UPLOAD_REQUEST_BYTES):
+        self.app = app
+        self.path = path
+        self.max_bytes = max_bytes
+
+    async def _reject(self, send) -> None:
+        detail = f"Upload is larger than {MAX_UPLOAD_BYTES // 1_000_000} MB."
+        body = JSONResponse({"detail": detail}).body
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"connection", b"close"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if not (
+            scope["type"] == "http" and scope["method"] == "POST" and scope["path"] == self.path
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        length = headers.get(b"content-length")
+        if length is not None and (not length.isdigit() or int(length) > self.max_bytes):
+            await self._reject(send)
+            return
+
+        received = 0
+        too_large = False
+        response_started = False
+
+        async def limited_receive():
+            nonlocal received, too_large
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    too_large = True
+                    raise _UploadTooLarge()
+            return message
+
+        async def guarded_send(message):
+            nonlocal response_started
+            if too_large:
+                return  # drop whatever the app tries to send; we answer 413 below
+            response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except _UploadTooLarge:
+            pass
+        except Exception:
+            if not too_large:
+                raise
+        if too_large and not response_started:
+            await self._reject(send)
+
+
+class _UploadTooLarge(Exception):
+    pass
+
+
+app.add_middleware(UploadSizeLimitMiddleware)
 
 
 @app.get("/", include_in_schema=False)

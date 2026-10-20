@@ -151,8 +151,12 @@ class FileStore:
                 )
             self.root.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(f".{name}.upload")
-            tmp.write_bytes(data)
-            os.replace(tmp, path)
+            try:
+                tmp.write_bytes(data)
+                os.replace(tmp, path)
+            except OSError as exc:
+                tmp.unlink(missing_ok=True)
+                raise UploadError(f"Could not save '{name}': {exc.strerror or exc}", 500) from exc
             st = path.stat()
             return StoredFile(name, st.st_size, st.st_mtime)
 

@@ -88,6 +88,13 @@ class FileStoreTests(unittest.TestCase):
             # Overwriting replaces the old size instead of adding to it.
             self.store.save("a.txt", b"1234567890", overwrite=True)
 
+    def test_failed_write_leaves_no_temp_file(self):
+        with mock.patch("app.storage.os.replace", side_effect=OSError(28, "No space left")):
+            with self.assertRaises(UploadError) as ctx:
+                self.store.save("a.txt", b"hello")
+        self.assertEqual(ctx.exception.status, 500)
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_file_count_cap(self):
         with mock.patch.object(storage, "MAX_STORED_FILES", 2):
             self.store.save("a.txt", b"1")
@@ -159,6 +166,38 @@ class UploadApiTests(unittest.TestCase):
         r = self.upload("huge.txt", b"x" * (storage.MAX_UPLOAD_BYTES + 200_000))
         self.assertEqual(r.status_code, 413)
         self.assertEqual(self.client.get("/files").json()["files"], [])
+
+    def multipart(self, name, data):
+        boundary = "testboundary123"
+        head = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{name}\"\r\nContent-Type: text/plain\r\n\r\n"
+        ).encode()
+        return boundary, head + data + f"\r\n--{boundary}--\r\n".encode()
+
+    def test_chunked_upload_without_content_length_is_capped(self):
+        boundary, body = self.multipart("big.txt", b"x" * (storage.MAX_UPLOAD_BYTES + 200_000))
+
+        def chunks():
+            for i in range(0, len(body), 64_000):
+                yield body[i : i + 64_000]
+
+        r = self.client.post(
+            "/files",
+            content=chunks(),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        self.assertEqual(r.status_code, 413, r.text)
+        self.assertFalse((self.root / "big.txt").exists())
+
+    def test_chunked_small_upload_still_works(self):
+        boundary, body = self.multipart("small.txt", b"hello chunks")
+        r = self.client.post(
+            "/files",
+            content=iter([body[:20], body[20:]]),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        self.assertEqual(r.status_code, 201, r.text)
 
     def test_delete_traversal_via_url(self):
         r = self.client.delete("/files/..%2F..%2Fetc%2Fpasswd")
