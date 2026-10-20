@@ -6,13 +6,13 @@ from pydantic import BaseModel, Field
 
 from app.agent.agent import run_agent
 from app.core.config import MISSING_KEY_MESSAGE, has_groq_api_key
+from app.tools.tool_registry import TOOLS
 
 logger = logging.getLogger("file_agent")
 
 
-
 class RunRequest(BaseModel):
-    user_input: str = Field(..., min_length=1, examples=["read notes.txt"])
+    user_input: str = Field(..., min_length=1, max_length=4000, examples=["read notes.txt"])
 
 
 class RunResponse(BaseModel):
@@ -39,11 +39,19 @@ def health():
     return {"status": "ok", "llm_configured": has_groq_api_key()}
 
 
+@app.get("/tools")
+def tools():
+    """Describe supported operations without reading or changing user files."""
+    return {"tools": [{"name": tool.name, "description": tool.description} for tool in TOOLS]}
+
+
 @app.post("/run", response_model=RunResponse)
 def run(
     body: RunRequest | None = Body(default=None),
     user_input: str | None = Query(
-        default=None, description="Deprecated: send a JSON body {\"user_input\": ...} instead."
+        default=None,
+        max_length=4000,
+        description='Deprecated: send a JSON body {"user_input": ...} instead.',
     ),
 ):
     text = (body.user_input if body else user_input or "").strip()
