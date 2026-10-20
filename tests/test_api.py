@@ -12,7 +12,7 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(
                 {t["name"] for t in response.json()["tools"]},
-                {"create_file", "read_file", "append_file"},
+                {"create_file", "read_file", "append_file", "search_files"},
             )
 
     def test_oversized_input_is_rejected(self):

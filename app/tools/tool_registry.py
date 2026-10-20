@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.tools.file_tools import append_file, create_file, read_file
+from app.tools.search_tools import search_files
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,12 @@ TOOLS = [
         name="append_file",
         func=append_file,
         description="Append content to an existing file in the data folder.",
+    ),
+    Tool(
+        name="search_files",
+        func=search_files,
+        description="Full-text (BM25) search across files in the data folder; returns ranked "
+        "file names with highlighted snippets.",
     ),
 ]
 

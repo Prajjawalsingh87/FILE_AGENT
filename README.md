@@ -11,6 +11,9 @@ Live instance (Render): <https://file-agent.onrender.com/>
 ## Features
 
 - Create, read and append files using natural language
+- **Full-text search** over `data/` with pure-Python BM25 ranking (`GET /search`),
+  highlighted snippets and pagination; also available to the agent as the `search_files` tool
+- **Web UI** at `/` (plain HTML/JS, no build step) to run the agent and search files
 - Strict JSON tool-calling with validation of the model's output
 - Path sandboxing: absolute paths and `..` traversal are rejected, all I/O stays in `data/`
 - CLI (`app/main.py`) and HTTP API (`app/api.py`) entry points
@@ -29,7 +32,10 @@ flowchart LR
   R --> T1[create_file]
   R --> T2[read_file]
   R --> T3[append_file]
+  R --> T4[search_files]
   T1 & T2 & T3 --> D[(data/ sandbox)]
+  T4 --> S[BM25 index<br/>app/search] --> D
+  W[GET /search] --> S
 ```
 
 1. The CLI or API receives a request.
@@ -83,10 +89,12 @@ buy milk
 uvicorn app.api:app --reload --port 8000
 ```
 
+Web UI: <http://localhost:8000/> (add `?q=words` to prefill and run a search).
 Interactive docs: <http://localhost:8000/docs>
 
 ```bash
 curl -s http://localhost:8000/health
+curl -s 'http://localhost:8000/search?q=hello&limit=5'
 curl -s -X POST http://localhost:8000/run \
   -H 'Content-Type: application/json' \
   -d '{"user_input": "read notes.txt"}'
@@ -103,19 +111,55 @@ docker run --rm -p 8000:8000 --env-file .env file-agent
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Liveness message: `{"message": "File Agent Running 🚀"}` |
+| `GET` | `/` | Single-page web UI (HTML) for running the agent and searching |
 | `GET` | `/health` | `{"status": "ok", "llm_configured": true/false}` |
+| `GET` | `/tools` | Names and descriptions of the agent's tools |
+| `GET` | `/search?q=&limit=&offset=` | BM25-ranked full-text search over `data/` |
 | `POST` | `/run` | Body `{"user_input": "..."}` → `{"response": "..."}` |
 
 `POST /run` still accepts the older `?user_input=...` query parameter for
 backward compatibility, but the JSON body is preferred. It returns `422` when
 no input is given and `503` when `GROQ_API_KEY` is not configured.
 
+## Search
+
+`GET /search` works like a tiny Elasticsearch over the files in `data/`, without
+any extra dependency (`app/search/`):
+
+- **Tokenizing**: lowercase Unicode word tokens; punctuation and `_` split words;
+  common English stopwords are dropped (unless the query is only stopwords).
+- **Inverted index**: `term -> {document: term frequency}`. Words in the file
+  path count as extra occurrences, so `notes` finds `notes.txt`.
+- **Ranking**: Okapi BM25 (`k1=1.2`, `b=0.75`); ties are broken by path.
+- **Snippets**: a ~200 character window around the densest cluster of matched
+  terms. Text is HTML-escaped and matches are wrapped in `<mark>`.
+- **Freshness**: before each query the directory is re-scanned with `stat`
+  only; if any path, size or mtime changed, the index is rebuilt. Files the
+  agent creates or appends to are searchable immediately.
+- **Limits**: `q` 1–256 chars (max 32 terms), `limit` 1–50 (default 10),
+  `offset` 0–1000. Hidden files, symlinks, binary files and files over 1 MB
+  are skipped; at most 5,000 files are indexed.
+
+```json
+{
+  "query": "hello prajjawal", "total": 1, "limit": 10, "offset": 0, "took_ms": 0.4,
+  "hits": [
+    {"path": "test.txt", "score": 1.4313,
+     "snippet": "<mark>Hello</mark> <mark>Prajjawal</mark>",
+     "matched_terms": ["hello", "prajjawal"]}
+  ]
+}
+```
+
+The agent can use the same index through the `search_files` tool, e.g.
+"find files that mention milk".
+
 ## Example commands
 
 - `create file notes.txt with hello`
 - `read notes.txt`
 - `append notes.txt with world`
+- `search files for hello`
 
 ## Project structure
 
@@ -129,8 +173,13 @@ FILE_AGENT/
 │   ├── core/
 │   │   ├── config.py         # env loading (.env), model settings
 │   │   └── llm.py            # Groq client (OpenAI-compatible)
+│   ├── search/
+│   │   ├── bm25.py           # tokenizer, inverted index, BM25, snippets
+│   │   └── index.py          # data/ scanner, rebuild on file changes
+│   ├── static/index.html     # web UI served at /
 │   ├── tools/
 │   │   ├── file_tools.py     # sandboxed create/read/append
+│   │   ├── search_tools.py   # search_files agent tool
 │   │   └── tool_registry.py  # tool lookup by name
 │   ├── api.py                # FastAPI app
 │   └── main.py               # interactive CLI

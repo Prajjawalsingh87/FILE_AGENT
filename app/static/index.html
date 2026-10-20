@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Agent</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5d6673;
+    --border: #d9dee5; --accent: #2557d6; --accent-text: #ffffff;
+    --mark: #ffe58a; --mark-text: #1b1f24; --ok: #1a7f37; --warn: #9a6700; --err: #c62828;
+    --code: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --panel: #171b21; --text: #e6e9ee; --muted: #9aa4b2;
+      --border: #2a313b; --accent: #5b8cff; --accent-text: #0b0d10;
+      --mark: #7a5d00; --mark-text: #fff6d6; --ok: #4ac26b; --warn: #d4a72c; --err: #ff6b6b;
+      --code: #1f252d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header, main { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 24px; flex-wrap: wrap; }
+  h1 { font-size: 1.4rem; margin: 0; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 14px; font-size: .9rem; }
+  .badge { font-size: .8rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding-top: 20px; padding-bottom: 40px; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; min-width: 0; }
+  form { display: flex; gap: 8px; }
+  input[type=search], textarea {
+    flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+  }
+  textarea { resize: vertical; min-height: 44px; }
+  input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: var(--accent-text); cursor: pointer; white-space: nowrap;
+  }
+  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--border); font-weight: 500; padding: 6px 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .meta { color: var(--muted); font-size: .85rem; margin: 12px 0 6px; min-height: 1.2em; }
+  ol.hits { list-style: none; padding: 0; margin: 0; }
+  ol.hits li { border-top: 1px solid var(--border); padding: 10px 0; }
+  .hit-head { display: flex; justify-content: space-between; gap: 8px; }
+  .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; overflow-wrap: anywhere; }
+  .score { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  .snippet { margin: 4px 0 0; color: var(--text); overflow-wrap: anywhere; }
+  mark { background: var(--mark); color: var(--mark-text); border-radius: 3px; padding: 0 2px; }
+  .pager { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  pre.out {
+    background: var(--code); border-radius: 8px; padding: 12px; margin: 12px 0 0; min-height: 3em;
+    white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  pre.out.err { color: var(--err); }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .tools { margin: 14px 0 0; padding-left: 18px; color: var(--muted); font-size: .88rem; }
+  .tools code { color: var(--text); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header>
+  <h1>File Agent</h1>
+  <span id="status" class="badge" role="status">checking…</span>
+</header>
+<main>
+  <section aria-labelledby="search-h">
+    <h2 id="search-h">Search files</h2>
+    <p class="sub">BM25-ranked full-text search over <code>data/</code>. Index refreshes when files change.</p>
+    <form id="search-form" role="search">
+      <label class="sr" for="q">Search text</label>
+      <input id="q" type="search" name="q" maxlength="256" placeholder="e.g. second line" autocomplete="off" required>
+      <button type="submit">Search</button>
+    </form>
+    <div id="search-meta" class="meta" aria-live="polite"></div>
+    <ol id="hits" class="hits"></ol>
+    <div id="pager" class="pager" hidden>
+      <button id="prev" class="secondary" type="button" disabled>Previous</button>
+      <button id="next" class="secondary" type="button" disabled>Next</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="run-h">
+    <h2 id="run-h">Run the agent</h2>
+    <p class="sub">Describe a file task in plain English. Requires <code>GROQ_API_KEY</code> on the server.</p>
+    <form id="run-form">
+      <label class="sr" for="cmd">Instruction</label>
+      <textarea id="cmd" maxlength="4000" rows="2" placeholder="create file todo.txt with buy milk" required></textarea>
+      <button id="run-btn" type="submit">Run</button>
+    </form>
+    <div class="examples" aria-label="Example instructions">
+      <button class="secondary" type="button" data-example="read notes.txt">read notes.txt</button>
+      <button class="secondary" type="button" data-example="search files for hello">search files for hello</button>
+      <button class="secondary" type="button" data-example="append notes.txt with another line">append notes.txt …</button>
+    </div>
+    <pre id="run-out" class="out" aria-live="polite">Output appears here.</pre>
+    <ul id="tools" class="tools" aria-label="Available tools"></ul>
+  </section>
+</main>
+<script>
+(() => {
+  const PAGE = 10;
+  const $ = (id) => document.getElementById(id);
+  const state = { q: "", offset: 0, total: 0 };
+
+  fetch("/health").then((r) => r.json()).then((h) => {
+    const el = $("status");
+    el.textContent = h.llm_configured ? "agent ready" : "search only: no LLM key";
+    el.className = "badge " + (h.llm_configured ? "ok" : "warn");
+    $("run-btn").disabled = !h.llm_configured;
+  }).catch(() => { $("status").textContent = "offline"; });
+
+  fetch("/tools").then((r) => r.json()).then((d) => {
+    const ul = $("tools");
+    d.tools.forEach((t) => {
+      const li = document.createElement("li");
+      const code = document.createElement("code");
+      code.textContent = t.name;
+      li.append(code, " – " + t.description);
+      ul.append(li);
+    });
+  }).catch(() => {});
+
+  async function runSearch(q, offset) {
+    state.q = q; state.offset = offset;
+    const meta = $("search-meta"), list = $("hits");
+    meta.textContent = "Searching…";
+    const params = new URLSearchParams({ q, limit: PAGE, offset });
+    history.replaceState(null, "", "?" + new URLSearchParams({ q }));
+    try {
+      const r = await fetch("/search?" + params);
+      const d = await r.json();
+      if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Invalid query");
+      state.total = d.total;
+      list.replaceChildren();
+      if (!d.total) {
+        meta.textContent = `No files match “${d.query}”.`;
+      } else {
+        const last = Math.min(d.offset + d.hits.length, d.total);
+        meta.textContent = `${d.offset + 1}–${last} of ${d.total} file${d.total === 1 ? "" : "s"} · ${d.took_ms} ms`;
+      }
+      d.hits.forEach((h) => {
+        const li = document.createElement("li");
+        const head = document.createElement("div");
+        head.className = "hit-head";
+        const path = document.createElement("span");
+        path.className = "path"; path.textContent = h.path;
+        const score = document.createElement("span");
+        score.className = "score"; score.textContent = "score " + h.score.toFixed(3);
+        head.append(path, score);
+        const p = document.createElement("p");
+        p.className = "snippet";
+        p.innerHTML = h.snippet; // server HTML-escapes text and adds only <mark>
+        li.append(head, p);
+        list.append(li);
+      });
+    } catch (e) {
+      state.total = 0;
+      list.replaceChildren();
+      meta.textContent = "Error: " + e.message;
+    }
+    $("prev").disabled = state.offset === 0;
+    $("next").disabled = state.offset + PAGE >= state.total;
+    $("pager").hidden = state.total <= PAGE;
+  }
+
+  $("search-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("q").value.trim();
+    if (q) runSearch(q, 0);
+  });
+  $("prev").addEventListener("click", () => runSearch(state.q, Math.max(0, state.offset - PAGE)));
+  $("next").addEventListener("click", () => runSearch(state.q, state.offset + PAGE));
+
+  $("run-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("cmd").value.trim();
+    if (!text) return;
+    const out = $("run-out"), btn = $("run-btn");
+    btn.disabled = true; out.className = "out"; out.textContent = "Running…";
+    try {
+      const r = await fetch("/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_input: text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Request failed (" + r.status + ")");
+      out.textContent = d.response;
+      if (d.response.startsWith("Error:")) out.className = "out err";
+      if (state.q) runSearch(state.q, state.offset); // files may have changed
+    } catch (err) {
+      out.className = "out err"; out.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.querySelectorAll("[data-example]").forEach((b) =>
+    b.addEventListener("click", () => { $("cmd").value = b.dataset.example; $("cmd").focus(); }));
+
+  const initial = new URLSearchParams(location.search).get("q");
+  if (initial) { $("q").value = initial; runSearch(initial, 0); }
+})();
+</script>
+</body>
+</html>
